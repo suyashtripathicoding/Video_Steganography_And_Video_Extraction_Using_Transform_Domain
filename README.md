@@ -24,5 +24,10 @@ To provide an impenetrable layer of security, the secret video is encrypted usin
 3. **Phase 3 (Extraction):** The receiver takes the stego video and the original cover video. The script subtracts the cover video pixels from the stego video and divides by the `alpha` value to perfectly reconstruct the secret frames.
 
 
+https://github.com/user-attachments/assets/f959da78-9e46-4f91-bfb0-07b04b880e02
+
+
+
+
 ![1745126575015](https://github.com/user-attachments/assets/3558e59f-c439-4255-9c8d-84995e510097)
 ![1745126583186](https://github.com/user-attachments/assets/78d30d79-9901-4fe7-a378-88e28f8c1c49)
