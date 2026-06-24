@@ -1,6 +1,6 @@
 # System Requirements & Dependencies
 
-This project requires **Python 3.7+**. The core operations rely on computer vision and cryptography libraries. 
+This project requires **Python 3.11.9**. The core operations rely on computer vision and cryptography libraries. 
 
 ## 📦 Required Python Libraries
 
