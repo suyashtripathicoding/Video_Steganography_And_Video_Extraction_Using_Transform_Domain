@@ -54,7 +54,7 @@ def embed_video(cover_video, secret_video, stego_output, alpha=0.04):
     cap_secret = cv2.VideoCapture(secret_video)
 
     if not cap_cover.isOpened() or not cap_secret.isOpened():
-        return "Error: Couldn't open one or both videos.", metrics
+        return "Error: Couldn't open one or both videos. Check file formats.", metrics
 
     frame_width = int(cap_cover.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap_cover.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -63,7 +63,9 @@ def embed_video(cover_video, secret_video, stego_output, alpha=0.04):
     cover_frame_count = int(cap_cover.get(cv2.CAP_PROP_FRAME_COUNT))
     secret_frame_count = int(cap_secret.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    out = cv2.VideoWriter(stego_output, cv2.VideoWriter_fourcc(*'XVID'), fps_cover, (frame_width, frame_height))
+    # Using FFV1 lossless codec and .mkv to ensure extraction works perfectly
+    fourcc = cv2.VideoWriter_fourcc(*'FFV1')
+    out = cv2.VideoWriter(stego_output, fourcc, fps_cover, (frame_width, frame_height))
 
     while cap_cover.isOpened():
         frame_start = time.time()
@@ -71,6 +73,7 @@ def embed_video(cover_video, secret_video, stego_output, alpha=0.04):
         if not ret_cover:
             break
         metrics['cover_frames_used'] += 1
+        
         ret_secret, frame_secret = cap_secret.read()
         if not ret_secret:
             cap_secret.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -85,6 +88,7 @@ def embed_video(cover_video, secret_video, stego_output, alpha=0.04):
             frame_secret = cv2.resize(frame_secret, (frame_width, frame_height))
             metrics['resized_frames'] += 1
 
+        # Alpha Blending
         stego_frame = cv2.addWeighted(frame_cover, 1.0, frame_secret, alpha, 0)
         out.write(stego_frame)
 
@@ -96,7 +100,7 @@ def embed_video(cover_video, secret_video, stego_output, alpha=0.04):
             psnr = 100 if mse == 0 else 10 * np.log10((255**2) / mse)
             metrics['psnr_values'].append(psnr)
             ssim_avg = np.mean([
-                ssim(fc[:, :, i], sf[:, :, i], data_range=np.ptp(sf[:, :, i]))
+                ssim(fc[:, :, i], sf[:, :, i], data_range=np.ptp(sf[:, :, i]) or 1.0)
                 for i in range(3)
             ])
             metrics['ssim_values'].append(ssim_avg)
@@ -110,121 +114,131 @@ def embed_video(cover_video, secret_video, stego_output, alpha=0.04):
     out.release()
 
     total_time = time.time() - metrics['start_time']
-    avg_time = np.mean(metrics['frame_processing_times']) * 1000
+    avg_time = np.mean(metrics['frame_processing_times']) * 1000 if metrics['frame_processing_times'] else 0
+    max_time = max(metrics['frame_processing_times']) * 1000 if metrics['frame_processing_times'] else 0
+    min_time = min(metrics['frame_processing_times']) * 1000 if metrics['frame_processing_times'] else 0
+
     report = f"""
 === Video Properties ===
  Cover Video: {os.path.basename(cover_video)}
   - Resolution: {frame_width}x{frame_height}
   - Frames: {cover_frame_count}
   - FPS: {fps_cover:.2f}
-  - Duration: {cover_frame_count/fps_cover:.2f} sec
  Secret Video: {os.path.basename(secret_video)}
   - Frames: {secret_frame_count}
   - FPS: {fps_secret:.2f}
-  - Duration: {secret_frame_count/fps_secret:.2f} sec
 
 === Processing Complete ===
  Output file: {stego_output}
- Total processing time: {total_time:.2f} seconds
- Average frame processing time: {avg_time:.2f} ms
- Max frame time: {max(metrics['frame_processing_times']) * 1000:.2f} ms | Min frame time: {min(metrics['frame_processing_times']) * 1000:.2f} ms
- Processing rate: {metrics['total_frames_processed'] / total_time:.2f} frames/sec
+ Total processing time: {total_time:.2f} sec
+ Avg frame processing time: {avg_time:.2f} ms
+ Max frame time: {max_time:.2f} ms | Min frame time: {min_time:.2f} ms
 
 === Frame Usage Statistics ===
  Total frames processed: {metrics['total_frames_processed']}
- Cover frames used: {metrics['cover_frames_used']}
- Secret frames used: {metrics['secret_frames_used']}
- Secret frames reused (looped): {metrics['secret_frames_reused']}
  Frames resized: {metrics['resized_frames']}
 
 === Error Metrics ===
- Average MSE (Mean Squared Error): {np.mean(metrics['mse_errors']):.2f}
- Average PSNR (Peak Signal-to-Noise Ratio): {np.mean(metrics['psnr_values']):.2f} dB
- Average SSIM (Structural Similarity): {np.mean(metrics['ssim_values']):.4f}
- Average pixel difference: {np.mean(metrics['frame_differences']):.2f}
+ Avg MSE: {np.mean(metrics['mse_errors']):.2f}
+ Avg PSNR: {np.mean(metrics['psnr_values']):.2f} dB
+ Avg SSIM: {np.mean(metrics['ssim_values']):.4f}
 
-=== Error Interpretation ===
- MSE: Lower is better (0 = perfect)
- PSNR: Higher is better (>30 dB = good, >40 dB = excellent)
- SSIM: Closer to 1 is better (1 = perfect)
- The current alpha ({alpha}) results in:
- - {"Minimal" if np.mean(metrics['frame_differences']) < 5 else "Moderate" if np.mean(metrics['frame_differences']) < 15 else "Significant"} visual differences
- - {"Excellent" if np.mean(metrics['psnr_values']) > 40 else "Good" if np.mean(metrics['psnr_values']) > 30 else "Fair"} quality preservation
-
-Stego video successfully created with comprehensive error analysis!
+Stego video successfully created!
 """
     return report, metrics
 
-# GUI
+
 class StegoApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Video In Video Hiding Using Transform Domain By Group 14")
+        self.root.title("Video In Video Hiding")
         self.root.geometry("700x600")
 
         self.cover_path = ""
         self.secret_path = ""
-        self.output_path = "stego.avi"
+        
+        # Changed stego output to .mkv to support the lossless FFV1 codec
+        self.output_path = "stego_output.mkv"
         self.encrypted_secret_path = "stego_encrypted.bin"
-        self.temp_decrypted_path = "secret..mp4"
 
         self.build_widgets()
 
     def build_widgets(self):
-        tk.Button(self.root, text="Select Cover Video", command=self.select_cover).pack(pady=5)
-        tk.Button(self.root, text="Select Secret Video", command=self.select_secret).pack(pady=5)
+        tk.Button(self.root, text="1. Select Cover Video", command=self.select_cover).pack(pady=5)
+        tk.Button(self.root, text="2. Select Secret Video", command=self.select_secret).pack(pady=5)
 
         tk.Label(self.root, text="Set Encryption Key:").pack()
         self.entry_encrypt = tk.Entry(self.root, show="*")
         self.entry_encrypt.pack()
 
-        tk.Button(self.root, text="Process & Encrypt Stego Video", command=self.encrypt_secret).pack(pady=5)
+        tk.Button(self.root, text="3. Process & Encrypt Secret Video", command=self.encrypt_secret).pack(pady=5)
 
-        tk.Label(self.root, text="Enter Key to Decrypt Stego:").pack()
+        tk.Label(self.root, text="Enter Key to Decrypt & Embed:").pack()
         self.entry_decrypt = tk.Entry(self.root, show="*")
         self.entry_decrypt.pack()
 
-        tk.Button(self.root, text="Decrypt Stego", command=self.decrypt_and_embed).pack(pady=5)
+        tk.Button(self.root, text="4. Embed Stego Video", command=self.decrypt_and_embed).pack(pady=10)
 
-        self.result_text = scrolledtext.ScrolledText(self.root, width=85, height=20)
+        self.result_text = scrolledtext.ScrolledText(self.root, width=80, height=20)
         self.result_text.pack(pady=10)
 
     def select_cover(self):
-        self.cover_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.avi")])
+        self.cover_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.avi *.mkv")])
         if self.cover_path:
-            messagebox.showinfo("Selected", f"Cover: {self.cover_path}")
+            messagebox.showinfo("Selected", f"Cover: {os.path.basename(self.cover_path)}")
 
     def select_secret(self):
-        self.secret_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.avi")])
+        self.secret_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.avi *.mkv")])
         if self.secret_path:
-            messagebox.showinfo("Selected", f"Secret: {self.secret_path}")
+            messagebox.showinfo("Selected", f"Secret: {os.path.basename(self.secret_path)}")
 
     def encrypt_secret(self):
         if not self.secret_path or not self.entry_encrypt.get():
-            messagebox.showerror("Missing Info", "Select a secret video and set a password.")
+            messagebox.showerror("Error", "Select a secret video and enter a password first.")
             return
+        
+        self.result_text.insert(tk.END, "Encrypting secret video...\n")
+        self.root.update()
+        
         encrypt_file(self.secret_path, self.encrypted_secret_path, self.entry_encrypt.get())
-        messagebox.showinfo("Encrypted", "Stego video encrypted.")
+        messagebox.showinfo("Success", "Secret video encrypted successfully.")
+        self.result_text.insert(tk.END, "Encryption Complete.\n")
 
     def decrypt_and_embed(self):
-        if not self.cover_path or not self.entry_decrypt.get():
-            messagebox.showerror("Missing Info", "Select a cover video and enter decryption key.")
+        if not self.cover_path or not os.path.exists(self.encrypted_secret_path):
+            messagebox.showerror("Error", "Missing cover video or encrypted file. Complete previous steps.")
             return
-
-        success = decrypt_file(self.encrypted_secret_path, self.temp_decrypted_path, self.entry_decrypt.get())
-        if not success:
-            messagebox.showerror("Failed", "Wrong password or corrupted file.")
+        if not self.entry_decrypt.get():
+            messagebox.showerror("Error", "Enter the decryption key.")
             return
 
         self.result_text.delete(1.0, tk.END)
-        self.result_text.insert(tk.END, "\n=== Processing Started ===\n")
+        self.result_text.insert(tk.END, "Decrypting file...\n")
         self.root.update()
 
-        report, metrics = embed_video(self.cover_path, self.temp_decrypted_path, self.output_path)
-        os.remove(self.temp_decrypted_path)
+        # Dynamically preserve the original extension of the secret video
+        _, file_extension = os.path.splitext(self.secret_path)
+        temp_decrypted_path = f"temp_secret_video{file_extension}"
 
-        self.result_text.insert(tk.END, f"\nProcessed frame {metrics['total_frames_processed']}/{metrics['cover_frames_used']}\n")
+        success = decrypt_file(self.encrypted_secret_path, temp_decrypted_path, self.entry_decrypt.get())
+        if not success:
+            messagebox.showerror("Failed", "Wrong password or corrupted encrypted file.")
+            if os.path.exists(temp_decrypted_path):
+                os.remove(temp_decrypted_path)
+            return
+
+        self.result_text.insert(tk.END, "Decryption successful. Embedding into cover video (This may take a while)...\n")
+        self.root.update()
+
+        # Run Embedding
+        report, metrics = embed_video(self.cover_path, temp_decrypted_path, self.output_path, alpha=0.04)
+        
+        # Cleanup temporary decrypted file
+        if os.path.exists(temp_decrypted_path):
+            os.remove(temp_decrypted_path)
+
         self.result_text.insert(tk.END, report)
+        self.root.update()
 
 if __name__ == "__main__":
     root = tk.Tk()
